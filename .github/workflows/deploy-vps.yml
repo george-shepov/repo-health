@@ -1,4 +1,5 @@
 name: Deploy to VPS
+
 on:
   workflow_dispatch:
     inputs:
@@ -6,44 +7,61 @@ on:
         description: "GHCR image tag to deploy"
         required: true
         default: latest
+
+concurrency:
+  group: repo-health-production
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: read
+
 jobs:
   deploy:
+    name: Deploy repository health
     runs-on: ubuntu-latest
-    environment: production
+    environment:
+      name: production
+      url: https://repos.giorgiy.org/health
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Configure SSH
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
         env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          test -n "$VPS_SSH_KEY"
-          test -n "$VPS_HOST"
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
-      - name: Install deployment files
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          REPO_HEALTH_ADMIN_TOKEN: ${{ secrets.REPO_HEALTH_ADMIN_TOKEN }}
-          REPO_HEALTH_GITHUB_TOKEN: ${{ secrets.REPO_HEALTH_GITHUB_TOKEN }}
           IMAGE_TAG: ${{ inputs.image_tag }}
-        run: |
-          test -n "$VPS_USER"
-          test -n "$REPO_HEALTH_ADMIN_TOKEN"
-          test -n "$REPO_HEALTH_GITHUB_TOKEN"
-          ssh "$VPS_USER@$VPS_HOST" 'mkdir -p /opt/repo-health'
-          scp docker-compose.production.yml "$VPS_USER@$VPS_HOST:/opt/repo-health/docker-compose.production.yml"
-          ssh "$VPS_USER@$VPS_HOST" "cat > /opt/repo-health/.env <<EOF
-          IMAGE_TAG=$IMAGE_TAG
-          GITHUB_OWNER=george-shepov
-          GITHUB_TOKEN=$REPO_HEALTH_GITHUB_TOKEN
-          ADMIN_TOKEN=$REPO_HEALTH_ADMIN_TOKEN
-          EOF
-          cd /opt/repo-health && docker compose -f docker-compose.production.yml pull && docker compose -f docker-compose.production.yml up -d
-          curl --fail --silent --show-error http://127.0.0.1:8091/api/health"
+          REPO_HEALTH_GITHUB_TOKEN: ${{ secrets.REPO_HEALTH_GITHUB_TOKEN }}
+          REPO_HEALTH_ADMIN_TOKEN: ${{ secrets.REPO_HEALTH_ADMIN_TOKEN }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          envs: IMAGE_TAG,REPO_HEALTH_GITHUB_TOKEN,REPO_HEALTH_ADMIN_TOKEN
+          command_timeout: 15m
+          script: |
+            set -Eeuo pipefail
+            APP_DIR=/opt/repo-health
+            mkdir -p "$APP_DIR"
+            cd "$APP_DIR"
+            test -n "$REPO_HEALTH_GITHUB_TOKEN"
+            test -n "$REPO_HEALTH_ADMIN_TOKEN"
+            cat > .env <<EOF
+            IMAGE_TAG=$IMAGE_TAG
+            GITHUB_OWNER=george-shepov
+            GITHUB_TOKEN=$REPO_HEALTH_GITHUB_TOKEN
+            ADMIN_TOKEN=$REPO_HEALTH_ADMIN_TOKEN
+            EOF
+            chmod 600 .env
+            docker compose -f docker-compose.production.yml --env-file .env pull
+            docker compose -f docker-compose.production.yml --env-file .env up -d
+            for attempt in $(seq 1 24); do
+              if curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8091/api/health >/dev/null; then
+                echo "Repository health container is healthy."
+                exit 0
+              fi
+              echo "Waiting for repository health ($attempt/24)..."
+              sleep 5
+            done
+            docker compose -f docker-compose.production.yml --env-file .env ps
+            docker compose -f docker-compose.production.yml --env-file .env logs --tail=120
+            exit 1
