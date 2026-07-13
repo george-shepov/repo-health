@@ -1,6 +1,10 @@
-name: Deploy to VPS
+name: Deploy Repos to VPS
 
 on:
+  workflow_run:
+    workflows: ["Publish container image"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       image_tag:
@@ -18,20 +22,35 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy repository health
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    name: Deploy Repos
     runs-on: ubuntu-latest
     environment:
       name: production
       url: https://repos.giorgiy.org/health
     timeout-minutes: 20
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag || github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy over SSH
+        with:
+          ref: main
+      - name: Copy Compose definition
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          source: docker-compose.production.yml
+          target: /opt/repo-health
+      - name: Deploy and verify on VPS
         uses: appleboy/ssh-action@v1.0.3
         env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
           REPO_HEALTH_GITHUB_TOKEN: ${{ secrets.REPO_HEALTH_GITHUB_TOKEN }}
           REPO_HEALTH_ADMIN_TOKEN: ${{ secrets.REPO_HEALTH_ADMIN_TOKEN }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -56,10 +75,10 @@ jobs:
             docker compose -f docker-compose.production.yml --env-file .env up -d
             for attempt in $(seq 1 24); do
               if curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8091/api/health >/dev/null; then
-                echo "Repository health container is healthy."
+                echo "Repos container is healthy."
                 exit 0
               fi
-              echo "Waiting for repository health ($attempt/24)..."
+              echo "Waiting for Repos ($attempt/24)..."
               sleep 5
             done
             docker compose -f docker-compose.production.yml --env-file .env ps
