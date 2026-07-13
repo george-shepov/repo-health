@@ -45,4 +45,5 @@ jobs:
           GITHUB_TOKEN=$REPO_HEALTH_GITHUB_TOKEN
           ADMIN_TOKEN=$REPO_HEALTH_ADMIN_TOKEN
           EOF
-          cd /opt/repo-health && docker compose -f docker-compose.production.yml pull && docker compose -f docker-compose.production.yml up -d"
+          cd /opt/repo-health && docker compose -f docker-compose.production.yml pull && docker compose -f docker-compose.production.yml up -d
+          curl --fail --silent --show-error http://127.0.0.1:8091/api/health"
