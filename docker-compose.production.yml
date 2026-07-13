@@ -1,0 +1,7 @@
+services:
+  repo-health:
+    image: ghcr.io/george-shepov/repo-health:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8091:8080"

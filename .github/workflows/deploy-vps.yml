@@ -1,0 +1,86 @@
+name: Deploy Repos to VPS
+
+on:
+  workflow_run:
+    workflows: ["Publish container image"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "GHCR image tag to deploy"
+        required: true
+        default: latest
+
+concurrency:
+  group: repo-health-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    name: Deploy Repos
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://repos.giorgiy.org/health
+    timeout-minutes: 20
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag || github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Copy Compose definition
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          source: docker-compose.production.yml
+          target: /opt/repo-health
+      - name: Deploy and verify on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          REPO_HEALTH_GITHUB_TOKEN: ${{ secrets.REPO_HEALTH_GITHUB_TOKEN }}
+          REPO_HEALTH_ADMIN_TOKEN: ${{ secrets.REPO_HEALTH_ADMIN_TOKEN }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          envs: IMAGE_TAG,REPO_HEALTH_GITHUB_TOKEN,REPO_HEALTH_ADMIN_TOKEN
+          command_timeout: 15m
+          script: |
+            set -Eeuo pipefail
+            APP_DIR=/opt/repo-health
+            mkdir -p "$APP_DIR"
+            cd "$APP_DIR"
+            test -n "$REPO_HEALTH_GITHUB_TOKEN"
+            test -n "$REPO_HEALTH_ADMIN_TOKEN"
+            cat > .env <<EOF
+            IMAGE_TAG=$IMAGE_TAG
+            GITHUB_OWNER=george-shepov
+            GITHUB_TOKEN=$REPO_HEALTH_GITHUB_TOKEN
+            ADMIN_TOKEN=$REPO_HEALTH_ADMIN_TOKEN
+            EOF
+            chmod 600 .env
+            docker compose -f docker-compose.production.yml --env-file .env pull
+            docker compose -f docker-compose.production.yml --env-file .env up -d
+            for attempt in $(seq 1 24); do
+              if curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8091/api/health >/dev/null; then
+                echo "Repos container is healthy."
+                exit 0
+              fi
+              echo "Waiting for Repos ($attempt/24)..."
+              sleep 5
+            done
+            docker compose -f docker-compose.production.yml --env-file .env ps
+            docker compose -f docker-compose.production.yml --env-file .env logs --tail=120
+            exit 1
