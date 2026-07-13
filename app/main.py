@@ -37,6 +37,7 @@ def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
 
 
 @app.get("/", include_in_schema=False)
+@app.get("/health", include_in_schema=False)
 def dashboard() -> FileResponse:
     return FileResponse(DASHBOARD_PATH)
 
