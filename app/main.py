@@ -36,8 +36,8 @@ def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="Admin authentication is required.")
 
 
-@app.get("/", include_in_schema=False)
-@app.get("/health", include_in_schema=False)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/health", methods=["GET", "HEAD"], include_in_schema=False)
 def dashboard() -> FileResponse:
     return FileResponse(DASHBOARD_PATH)
 
