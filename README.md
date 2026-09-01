@@ -9,7 +9,13 @@ This is a **public code repository**. It deliberately contains no repository sna
 - Owned repository count
 - Open issue and pull-request counts
 - Visibility, archive status, default branch, size, and update time
+- Stars, forks, watchers, language, description, topics, pushed time, commit activity, contributors, releases, tags, CI run health, deployment availability, GitHub Pages availability, and permitted traffic data
 - Search and “open work” filtering
+
+The read-only API also marks unavailable optional endpoints when the configured
+GitHub token cannot access traffic, Pages, deployments, or Actions metadata. It
+never returns secret or variable values; only names and reference availability
+are suitable for the control plane to inspect.
 
 The API refuses to return any portfolio data without a separate administrator token. GitHub access remains server-side.
 
