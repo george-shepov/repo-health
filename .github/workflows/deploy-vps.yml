@@ -44,7 +44,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
           source: docker-compose.production.yml
-          target: /opt/repo-health
+          target: /tmp/repo-health-incoming
       - name: Deploy and verify on VPS
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -60,7 +60,13 @@ jobs:
           script: |
             set -Eeuo pipefail
             APP_DIR=/opt/repo-health
-            mkdir -p "$APP_DIR"
+            operator_user="$(id -un)"
+            operator_group="$(id -gn)"
+            sudo install -d -m 750 -o "$operator_user" -g "$operator_group" "$APP_DIR"
+            sudo install -m 640 -o "$operator_user" -g "$operator_group" \
+              /tmp/repo-health-incoming/docker-compose.production.yml \
+              "$APP_DIR/docker-compose.production.yml"
+            rm -rf /tmp/repo-health-incoming
             cd "$APP_DIR"
             test -n "$REPO_HEALTH_GITHUB_TOKEN"
             test -n "$REPO_HEALTH_ADMIN_TOKEN"
