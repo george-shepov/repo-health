@@ -1,3 +1,6 @@
+import base64
+import json
+
 import pytest
 
 from app.github_health import GitHubHealthService
@@ -23,6 +26,22 @@ async def test_snapshot_aggregates_owned_repositories_and_open_work(monkeypatch)
                 },
                 {"owner": {"login": "other-user"}},
             ]
+        if path.endswith("/shared/contents/state/repository-capability-map.json"):
+            catalog = {
+                "repositories": [
+                    {
+                        "repo": "george-shepov/FieldKit",
+                        "audit_state": "partial",
+                        "role": "Field operations toolkit",
+                        "capabilities": ["job tracking"],
+                        "components": [{"name": "job-ledger", "path": "app/", "reuse": "field work tracking"}],
+                    }
+                ]
+            }
+            return {
+                "encoding": "base64",
+                "content": base64.b64encode(json.dumps(catalog).encode()).decode(),
+            }
         if "is:issue" in params.get("q", ""):
             return {"items": [{"repository_url": "https://api.github.com/repos/george-shepov/FieldKit"}]}
         if "q" in params:
@@ -48,3 +67,8 @@ async def test_snapshot_aggregates_owned_repositories_and_open_work(monkeypatch)
     assert result["repositories"][0]["recent_commit_activity"]["commits_sampled"] == 1
     assert result["repositories"][0]["ci"]["healthy"] is False
     assert result["repositories"][0]["deployment_activity"]["count"] == 0
+    assert result["repositories"][0]["audit_state"] == "partial"
+    assert result["repositories"][0]["role"] == "Field operations toolkit"
+    assert result["repositories"][0]["capabilities"] == ["job tracking"]
+    assert result["totals"]["capability_mapped"] == 1
+    assert result["totals"]["needs_audit"] == 0
