@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import time
 from collections import Counter
 from typing import Any
@@ -46,6 +48,7 @@ class GitHubHealthService:
                 page += 1
             issue_counts = await self._search_counts(client, "issue")
             pr_counts = await self._search_counts(client, "pr")
+            capability_map = await self._capability_map(client)
             details = await asyncio.gather(*(self._measure_repo(client, repo) for repo in repositories))
 
         rows = [
@@ -67,6 +70,10 @@ class GitHubHealthService:
                 "open_pull_requests": pr_counts[repo["full_name"]],
                 "updated_at": repo.get("updated_at"),
                 "pushed_at": repo.get("pushed_at"),
+                "audit_state": capability_map.get(repo["full_name"], {}).get("audit_state", "unmapped"),
+                "role": capability_map.get(repo["full_name"], {}).get("role", ""),
+                "capabilities": capability_map.get(repo["full_name"], {}).get("capabilities", []),
+                "components": capability_map.get(repo["full_name"], {}).get("components", []),
                 **details[index],
             }
             for index, repo in enumerate(repositories)
@@ -84,10 +91,34 @@ class GitHubHealthService:
                 "archived": sum(row["archived"] for row in rows),
                 "stars": sum(row["stars"] for row in rows),
                 "forks": sum(row["forks"] for row in rows),
+                "capability_mapped": sum(row["audit_state"] in {"verified", "partial"} for row in rows),
+                "needs_audit": sum(row["audit_state"] in {"needs_audit", "unmapped"} for row in rows),
             },
         }
         self._cached_at = time.monotonic()
         return self._snapshot
+
+    async def _capability_map(self, client: httpx.AsyncClient) -> dict[str, dict[str, Any]]:
+        payload = await self._optional(
+            client,
+            f"/repos/{self.owner}/shared/contents/state/repository-capability-map.json",
+            {"ref": "main"},
+        )
+        if not isinstance(payload, dict) or payload.get("_unavailable"):
+            return {}
+        try:
+            encoded = str(payload.get("content") or "").replace("\n", "")
+            if payload.get("encoding") != "base64" or not encoded:
+                return {}
+            catalog = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        rows = catalog.get("repositories", []) if isinstance(catalog, dict) else []
+        return {
+            str(row.get("repo")): row
+            for row in rows
+            if isinstance(row, dict) and row.get("repo")
+        }
 
     async def _measure_repo(self, client: httpx.AsyncClient, repo: dict[str, Any]) -> dict[str, Any]:
         full_name = repo["full_name"]
